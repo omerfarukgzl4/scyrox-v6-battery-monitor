@@ -1,4 +1,4 @@
-"""
+r"""
 Scyrox V6 Tray Battery Monitor
 ==============================
 
@@ -74,9 +74,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
+import warnings
+
 import hid
 from PIL import Image, ImageDraw, ImageFont
 import pystray
+
+# PIL IcoImagePlugin hatalı okunan (boyutu yanlış) .ico dosyaları için uyarı veriyor, bunu gizle
+warnings.filterwarnings("ignore", category=UserWarning, module="PIL.IcoImagePlugin")
 
 
 # =========================================================================
@@ -270,16 +275,6 @@ def _pick_color(state: BatteryState) -> tuple[int, int, int, int]:
     return COLOR_CRITICAL
 
 
-def _load_font(size: int) -> ImageFont.ImageFont:
-    """Windows'ta sırasıyla en okunaklı fontu yükle."""
-    for name in ("segoeuib.ttf", "segoeui.ttf", "arialbd.ttf", "arial.ttf"):
-        try:
-            return ImageFont.truetype(name, size)
-        except Exception:
-            continue
-    return ImageFont.load_default()
-
-
 def load_idle_icon() -> Image.Image:
     """Boşta kalınca gösterilecek mouse ikonu. Dosya yoksa placeholder."""
     try:
@@ -290,30 +285,33 @@ def load_idle_icon() -> Image.Image:
 
 
 def make_battery_icon(state: BatteryState) -> Image.Image:
-    """Pil yüzdesini içeren, renkli çerçeveli kare ikonu üret."""
-    size = 64
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    """Pil yüzdesini içeren, pikselleri keskinleştirilmiş kare ikonu üret."""
+    # Tam olarak piksellere karşılık gelmesi ve kenar yumuşatmasının (anti-aliasing)
+    # engellenmesi için 16x16 lık ızgarada çizim yapılıp NEAREST ile büyütülür.
+    base_size = 16
+    img = Image.new("RGBA", (base_size, base_size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
     text = f"{state.percent}" if state.percent is not None else "!"
     border = _pick_color(state)
 
-    # Arka plan + renkli çerçeve
-    draw.rounded_rectangle((2, 2, size - 2, size - 2), radius=10,
-                           fill=(20, 20, 24, 255))
-    draw.rounded_rectangle((2, 2, size - 2, size - 2), radius=10,
-                           outline=border, width=3)
+    # Arka plan + tek piksellik keskin renkli çerçeve
+    draw.rectangle((0, 0, base_size - 1, base_size - 1),
+                   fill=(20, 20, 24, 255), outline=border, width=1)
 
-    # Ortalanmış büyük yüzde yazısı
-    font = _load_font(34)
+    # Yumuşatmasız (aliased) varsayılan bitmap font
+    font = ImageFont.load_default()
     bbox = draw.textbbox((0, 0), text, font=font)
     tw = bbox[2] - bbox[0]
     th = bbox[3] - bbox[1]
-    x = (size - tw) // 2 - bbox[0]
-    y = (size - th) // 2 - bbox[1] - 2
+    x = (base_size - tw) // 2 - bbox[0]
+    y = (base_size - th) // 2 - bbox[1]
     draw.text((x, y), text, fill=(255, 255, 255, 255), font=font)
 
-    return img
+    # İkonu keskin 4x4 piksellik bloklara dönüştürmek için 64x64'e büyüt.
+    # Böylece Windows tray ikonu küçültse bile pikseller okunabilir kalır.
+    resample_filter = getattr(Image.Resampling, "NEAREST", 0) if hasattr(Image, "Resampling") else getattr(Image, "NEAREST", 0)
+    return img.resize((64, 64), resample=resample_filter)
 
 
 # =========================================================================
